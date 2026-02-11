@@ -1,0 +1,48 @@
+{
+  "bot_token": "8589170832:AAELgaeN6V-k4fCo-57XtABDT02K0xtAOMQ",
+  "database": {
+    "name": "studyboost.db",
+    "backup_enabled": true,
+    "backup_interval_hours": 24
+  },
+  "features": {
+    "cloud_sync": false,
+    "notifications": true,
+    "quiz_enabled": true,
+    "pdf_generation": true,
+    "gamification": true
+  },
+  "gamification": {
+    "points_per_note": 5,
+    "points_per_quiz_answer": 10,
+    "points_per_daily_tip": 2,
+    "points_per_goal_completion": 20
+  },
+  "limits": {
+    "max_notes_per_day": 100,
+    "max_quiz_attempts_per_day": 20,
+    "max_file_size_mb": 20
+  },
+  "cloud": {
+    "google_drive": {
+      "enabled": false,
+      "client_id": "",
+      "client_secret": ""
+    },
+    "dropbox": {
+      "enabled": false,
+      "app_key": "",
+      "app_secret": ""
+    }
+  },
+  "notifications": {
+    "goal_reminders": true,
+    "deadline_reminders": true,
+    "schedule_reminders": true,
+    "achievement_notifications": true
+  },
+  "localization": {
+    "language": "ru",
+    "timezone": "Europe/Moscow"
+  }
+}
