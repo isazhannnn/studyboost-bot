@@ -4,7 +4,7 @@
 """
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 import json
 
@@ -153,8 +153,8 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO users (user_id, username, first_name, last_active)
-            VALUES (?, ?, ?, DATE('now'))
+            INSERT OR IGNORE INTO users (user_id, username, first_name, last_active, streak, best_streak)
+            VALUES (?, ?, ?, DATE('now'), 1, 1)
         ''', (user_id, username, first_name))
         conn.commit()
         conn.close()
@@ -171,7 +171,7 @@ class Database:
         
         if row:
             last_active = datetime.strptime(row['last_active'], '%Y-%m-%d').date()
-            today = datetime.now().date()
+            today = datetime.now(timezone.utc).date()
             current_streak = row['streak']
             
             # Проверяем серию
@@ -240,11 +240,10 @@ class Database:
         
         note_id = cursor.lastrowid
         
-        # Обновляем активность
-        self.update_activity(note_data['user_id'])
-        
         conn.commit()
         conn.close()
+        # Activity uses a separate write connection; release the note transaction first.
+        self.update_activity(note_data['user_id'])
         return note_id
     
     def get_user_notes(self, user_id: int, category: str = None) -> List[Dict]:
@@ -326,18 +325,27 @@ class Database:
         conn.close()
         return goals
     
-    def complete_goal(self, goal_id: int):
-        """Отметка цели как выполненной"""
+    def complete_goal(self, goal_id: int, user_id: int) -> bool:
         conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE goals 
-            SET completed = 1, completed_at = CURRENT_TIMESTAMP
-            WHERE goal_id = ?
-        ''', (goal_id,))
-        conn.commit()
-        conn.close()
-    
+        try:
+            with conn:
+                result = conn.execute(
+                    "UPDATE goals SET completed = 1, completed_at = CURRENT_TIMESTAMP "
+                    "WHERE goal_id = ? AND user_id = ? AND completed = 0", (goal_id, user_id))
+                return result.rowcount == 1
+        finally:
+            conn.close()
+
+    def delete_user_data(self, user_id: int):
+        conn = self.get_connection()
+        try:
+            with conn:
+                for table in ('notes', 'goals', 'achievements', 'activity_log',
+                              'quiz_results', 'schedule', 'daily_tips_read', 'users'):
+                    conn.execute(f'DELETE FROM {table} WHERE user_id = ?', (user_id,))
+        finally:
+            conn.close()
+
     # === СТАТИСТИКА ===
     
     def get_user_stats(self, user_id: int) -> Dict:
@@ -494,3 +502,13 @@ class Database:
         schedule = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return schedule
+
+    def record_quiz_result(self, user_id: int, subject: str, score: int, total: int):
+        conn = self.get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    'INSERT INTO quiz_results (user_id, subject, score, total_questions) VALUES (?, ?, ?, ?)',
+                    (user_id, subject, score, total))
+        finally:
+            conn.close()

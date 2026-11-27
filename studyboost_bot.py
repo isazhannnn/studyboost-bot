@@ -16,22 +16,28 @@ from cloud_sync import CloudSync
 from quiz_system import QuizSystem
 from datetime import datetime, timedelta
 import random
+import secrets
+from pathlib import Path
+from telegram.helpers import escape_markdown
+from telegram.ext import TypeHandler, ApplicationHandlerStop
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 
 (CHOOSING_CATEGORY, ADDING_NOTE, SETTING_GOAL, 
  ADDING_DEADLINE, CHOOSING_SUBJECT, QUIZ_ANSWER,
  ADDING_SCHEDULE, SETTING_REMINDER) = range(8)
 
 class StudyBoostBot:
-    def __init__(self, token: str):
+    def __init__(self, token: str, db_name: str = 'studyboost.db'):
         self.token = token
-        self.db = Database()
-        self.gamification = GamificationSystem()
+        self.db = Database(db_name)
+        self.gamification = GamificationSystem(db_name)
         self.pdf_gen = PDFGenerator()
         self.cloud = CloudSync()
         self.quiz = QuizSystem()
@@ -41,7 +47,7 @@ class StudyBoostBot:
             "🎯 Начните с самой сложной задачи утром - это даст заряд на весь день!",
             "📚 Повторяйте материал через 1 час, 1 день, 1 неделю и 1 месяц.",
             "🧘 Не забывайте делать перерывы - мозг тоже нуждается в отдыхе!",
-            "✍️ Записывайте от руки - это улучшает запоминание на 34%!",
+            "✍️ Попробуйте записывать ключевые идеи своими словами.",
             "🎵 Классическая музыка или звуки природы помогают концентрации.",
             "💪 Учеба марафон, а не спринт. Регулярность важнее интенсивности!",
             "🌙 Качественный сон = лучшая память. Спите 7-8 часов!",
@@ -53,7 +59,6 @@ class StudyBoostBot:
         keyboard = [
             ['📝 Добавить заметку', '📚 Мои заметки'],
             ['🎯 Цели и прогресс', '🎮 Викторины'],
-            ['🤝 Делиться', '⚙️ Настройки'],
             ['💡 Совет дня']
         ]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -62,28 +67,16 @@ class StudyBoostBot:
         user = update.effective_user
         user_id = user.id
         
-        if not self.db.user_exists(user_id):
+        if context.user_data.pop('new_registration', False) or not self.db.user_exists(user_id):
             self.db.create_user(user_id, user.first_name)
-            welcome_text = f"""
-🎓 *Добро пожаловать в StudyBoost, {user.first_name}!* 🚀
+            welcome_text = f"""Привет, {escape_markdown(user.first_name)}!
 
-Я помогу тебе организовать учебу, достигать целей и оставаться мотивированным!
+StudyBoost — твой учебный блокнот.
 
-*Что я умею:*
-📝 Сохранять заметки (текст, фото, голос)
-🗂 Организовывать по предметам с тегами
-📄 Генерировать PDF конспекты
-🎯 Отслеживать цели и дедлайны
-🏆 Система баллов и достижений
-🎮 Викторины для проверки знаний
-💡 Ежедневные советы
-☁️ Синхронизация с облаком
+Сохраняй текст, фото и голосовые по предметам, собирай конспекты в PDF и проверяй знания в викторинах.
 
-Используй кнопки меню или команды:
-/help - справка
-/stats - статистика
-
-*Начни свой путь к успеху прямо сейчас!* 💪
+Начни с кнопки «Добавить заметку».
+/help — команды, /privacy — хранение данных.
 """
             await update.message.reply_text(
                 welcome_text,
@@ -91,7 +84,7 @@ class StudyBoostBot:
                 reply_markup=self.get_main_menu_keyboard()
             )
             
-            self.gamification.add_points(user_id, 10, "Регистрация")
+
         else:
             level = self.gamification.get_user_level(user_id)
             points = self.gamification.get_user_points(user_id)
@@ -106,36 +99,18 @@ class StudyBoostBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = """
-📖 *Справка по StudyBoost*
+*StudyBoost — справка*
 
-*Основные команды:*
-/start - Главное меню
-/stats - Твоя статистика
-/goals - Управление целями
-/schedule - Расписание занятий
+/start — главное меню
+/stats — статистика
+/goals — цели и прогресс
+/goal Текст — добавить цель
+/cancel — отменить текущий ввод
+/privacy — хранение данных
+/delete_me — удалить свои данные
 
-*Работа с заметками:*
-• Используй кнопку "Добавить заметку"
-• Отправь текст, фото или голосовое сообщение
-• Добавь теги: #математика #лекция
-• Сохрани и заработай баллы!
-
-*Категории и теги:*
-Используй хештеги для организации:
-#математика, #физика, #история и т.д.
-
-*Цели и мотивация:*
-• Ставь дневные/недельные цели
-• Получай напоминания о дедлайнах
-• Зарабатывай баллы за достижения
-
-*Система уровней:*
-🥉 1-100 баллов: Новичок
-🥈 101-500: Студент
-🥇 501-1000: Отличник
-💎 1000+: Гений
-
-Нужна помощь? Пиши @support
+Чтобы сохранить заметку, выбери предмет и отправь текст, фото или голос. Добавляй #теги в текст или подпись к фото.
+Заметки и PDF доступны через «Мои заметки».
 """
         await update.message.reply_text(help_text, parse_mode='Markdown')
     
@@ -148,8 +123,6 @@ class StudyBoostBot:
             '📚 Мои заметки': self.show_notes,
             '🎯 Цели и прогресс': self.show_goals,
             '🎮 Викторины': self.show_quizzes,
-            '🤝 Делиться': self.share_menu,
-            '⚙️ Настройки': self.settings_menu,
             '💡 Совет дня': self.daily_tip
         }
         
@@ -285,9 +258,7 @@ class StudyBoostBot:
         keyboard.append([
             InlineKeyboardButton("📄 Создать PDF конспект", callback_data='generate_pdf')
         ])
-        keyboard.append([
-            InlineKeyboardButton("☁️ Синхронизировать", callback_data='sync_cloud')
-        ])
+
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -306,8 +277,10 @@ class StudyBoostBot:
         stats = self.db.get_user_stats(user_id)
         level = self.gamification.get_user_level(user_id)
         points = self.gamification.get_user_points(user_id)
-        next_level_points = (level + 1) * 100
-        progress = (points % 100) / 100 * 10
+        requirements = self.gamification.level_requirements
+        floor = requirements[level]
+        next_level_points = requirements.get(level + 1, floor)
+        progress = 10 if next_level_points == floor else min(10, (points - floor) / (next_level_points - floor) * 10)
         
         progress_bar = "▰" * int(progress) + "▱" * (10 - int(progress))
         
@@ -320,23 +293,26 @@ class StudyBoostBot:
             goals_text = "\n\n*Активные цели:*\n"
             for goal in active_goals[:5]:
                 status = "✅" if goal.get('completed_today') else "⬜"
-                goals_text += f"{status} {goal['title']}\n"
+                goals_text += f"{status} {escape_markdown(goal['title'][:180])}\n"
         
         keyboard = [
             [InlineKeyboardButton("➕ Добавить цель", callback_data='add_goal')],
-            [InlineKeyboardButton("📅 Дедлайны", callback_data='view_deadlines')],
             [InlineKeyboardButton("🏆 Достижения", callback_data='view_achievements')],
             [InlineKeyboardButton("📊 Детальная статистика", callback_data='detailed_stats')]
         ]
+        for goal in active_goals[:5]:
+            keyboard.append([InlineKeyboardButton(
+                "Выполнено: " + goal['title'][:30],
+                callback_data=f"complete_goal_{goal['goal_id']}")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await update.message.reply_text(
             f"🎯 *Цели и прогресс*\n\n"
             f"🏆 Уровень: {level}\n"
             f"⭐ Баллы: {points}/{next_level_points}\n"
             f"{progress_bar}\n\n"
             f"📝 Заметок создано: {stats.get('total_notes', 0)}\n"
-            f"✅ Целей выполнено сегодня: {len(completed_today)}\n"
+            f"✅ Целей выполнено сегодня: {stats.get('goals_completed_today', 0)}\n"
             f"🔥 Дней подряд: {stats.get('streak', 0)}"
             f"{goals_text}",
             parse_mode='Markdown',
@@ -381,6 +357,10 @@ class StudyBoostBot:
         context.user_data['quiz_questions'] = questions
         context.user_data['quiz_current'] = 0
         context.user_data['quiz_score'] = 0
+        context.user_data['quiz_session'] = secrets.token_hex(4)
+        context.user_data['quiz_message'] = query.message.message_id
+        context.user_data['quiz_awaiting_answer'] = True
+        context.user_data['quiz_finished'] = False
         
         await self.ask_quiz_question(query, context)
         return QUIZ_ANSWER
@@ -393,13 +373,14 @@ class StudyBoostBot:
             await self.finish_quiz(query, context)
             return ConversationHandler.END
         
+        context.user_data['quiz_awaiting_answer'] = True
         question = questions[current]
         subject_name = self.quiz.get_subject_name(context.user_data['quiz_subject'])
         
         keyboard = []
         for i, option in enumerate(question['options']):
             keyboard.append([
-                InlineKeyboardButton(option, callback_data=f'answer_{i}')
+                InlineKeyboardButton(option, callback_data=f"answer_{context.user_data['quiz_session']}_{current}_{i}")
             ])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -416,11 +397,22 @@ class StudyBoostBot:
         query = update.callback_query
         await query.answer()
         
-        answer = int(query.data.split('_')[1])
+        parts = query.data.split('_')
+        if (len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit()
+                or parts[1] != context.user_data.get('quiz_session')
+                or int(parts[2]) != context.user_data.get('quiz_current')
+                or query.message.message_id != context.user_data.get('quiz_message')
+                or not context.user_data.get('quiz_awaiting_answer')
+                or context.user_data.get('quiz_finished')):
+            return QUIZ_ANSWER
+        answer = int(parts[3])
         questions = context.user_data['quiz_questions']
         current = context.user_data['quiz_current']
         question = questions[current]
         
+        if not 0 <= answer < len(question['options']):
+            return QUIZ_ANSWER
+        context.user_data['quiz_awaiting_answer'] = False
         is_correct, explanation = self.quiz.check_answer(question, answer)
         
         if is_correct:
@@ -435,7 +427,7 @@ class StudyBoostBot:
         
         context.user_data['quiz_current'] += 1
         
-        keyboard = [[InlineKeyboardButton("Следующий вопрос ➡️", callback_data='next_question')]]
+        keyboard = [[InlineKeyboardButton("Следующий вопрос ➡️", callback_data=f"next_question_{context.user_data['quiz_session']}_{context.user_data['quiz_current']}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -450,17 +442,24 @@ class StudyBoostBot:
         query = update.callback_query
         await query.answer()
         
+        expected = f"next_question_{context.user_data.get('quiz_session')}_{context.user_data.get('quiz_current')}"
+        if (query.data != expected
+                or query.message.message_id != context.user_data.get('quiz_message')
+                or context.user_data.get('quiz_awaiting_answer')
+                or context.user_data.get('quiz_finished')):
+            return QUIZ_ANSWER
         questions = context.user_data['quiz_questions']
         current = context.user_data['quiz_current']
-        
         if current >= len(questions):
             await self.finish_quiz(query, context)
             return ConversationHandler.END
-        
         await self.ask_quiz_question(query, context)
         return QUIZ_ANSWER
     
     async def finish_quiz(self, query, context):
+        if context.user_data.get('quiz_finished'):
+            return
+        context.user_data['quiz_finished'] = True
         user_id = query.from_user.id
         score = context.user_data['quiz_score']
         total = len(context.user_data['quiz_questions'])
@@ -469,6 +468,7 @@ class StudyBoostBot:
         percentage = (score / total) * 100
         points = score * 10
         
+        self.db.record_quiz_result(user_id, subject, score, total)
         self.gamification.add_points(user_id, points, f"Викторина по {subject}")
         
         if percentage == 100:
@@ -514,54 +514,11 @@ class StudyBoostBot:
             reply_markup=self.get_main_menu_keyboard()
         )
     
-    async def share_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        keyboard = [
-            [InlineKeyboardButton("📤 Поделиться заметкой", callback_data='share_note')],
-            [InlineKeyboardButton("👥 Мои группы", callback_data='my_groups')],
-            [InlineKeyboardButton("➕ Создать группу", callback_data='create_group')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "🤝 *Обмен заметками*\n\n"
-            "Делись конспектами с друзьями и одногруппниками!",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    
-    async def settings_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        settings = self.db.get_user_settings(user_id)
-        
-        notifications = "🔔 Вкл" if settings.get('notifications', True) else "🔕 Выкл"
-        cloud_sync = "☁️ Вкл" if settings.get('cloud_sync', False) else "❌ Выкл"
-        
-        keyboard = [
-            [InlineKeyboardButton(f"Уведомления: {notifications}", 
-                                callback_data='toggle_notifications')],
-            [InlineKeyboardButton(f"Облачная синхронизация: {cloud_sync}", 
-                                callback_data='toggle_cloud')],
-            [InlineKeyboardButton("📅 Настроить расписание", 
-                                callback_data='setup_schedule')],
-            [InlineKeyboardButton("🔗 Подключить облако", 
-                                callback_data='connect_cloud')],
-            [InlineKeyboardButton("🗑 Очистить все данные", 
-                                callback_data='clear_data')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "⚙️ *Настройки*\n\n"
-            "Настрой бота под себя:",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         stats = self.db.get_detailed_stats(user_id)
         
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"📊 *Твоя статистика*\n\n"
             f"🏆 Уровень: {stats['level']}\n"
             f"⭐ Всего баллов: {stats['total_points']}\n\n"
@@ -582,23 +539,57 @@ class StudyBoostBot:
         query = update.callback_query
         data = query.data
         
-        if data.startswith('cat_'):
-            return await self.category_selected(update, context)
-        elif data.startswith('quiz_'):
-            return await self.start_quiz(update, context)
-        elif data.startswith('answer_'):
-            return await self.handle_quiz_answer(update, context)
-        elif data == 'next_question':
-            return await self.next_question(update, context)
-        elif data == 'generate_pdf':
+        if data == 'add_goal':
+            await query.answer()
+            await query.message.reply_text("Отправь /goal и текст цели. Например: /goal Повторить квадратные уравнения")
+            return
+        if data.startswith('complete_goal_'):
+            await query.answer()
+            try:
+                goal_id = int(data[len('complete_goal_'):])
+            except ValueError:
+                return
+            completed = self.db.complete_goal(goal_id, query.from_user.id)
+            await query.message.reply_text("Цель выполнена." if completed else "Цель уже выполнена или недоступна.")
+            return
+        if data.startswith('delete_confirm_'):
+            nonce = context.user_data.pop('delete_nonce', None)
+            if not nonce or data != f'delete_confirm_{nonce}':
+                await query.answer("Подтверждение устарело.", show_alert=True)
+                return
+            self.db.delete_user_data(query.from_user.id)
+            context.user_data.clear()
+            await query.answer()
+            await query.edit_message_text("Твои данные удалены из базы бота. Чтобы начать заново, отправь /start.")
+            return ConversationHandler.END
+        if data.startswith('view_cat_'):
+            await query.answer()
+            notes = self.db.get_user_notes(query.from_user.id, data[len('view_cat_'):])
+            if not notes:
+                await query.message.reply_text("В этой категории пока нет заметок.")
+            for note in notes[:20]:
+                if note['note_type'] == 'photo' and note.get('file_id'):
+                    await query.message.reply_photo(note['file_id'], caption=(note.get('content') or '')[:1024])
+                elif note['note_type'] == 'voice' and note.get('file_id'):
+                    await query.message.reply_voice(note['file_id'])
+                else:
+                    content = note.get('content') or '(пустая заметка)'
+                    for offset in range(0, len(content), 4000):
+                        await query.message.reply_text(content[offset:offset + 4000])
+            if len(notes) > 20:
+                await query.message.reply_text("Показаны последние 20 заметок. Полный конспект доступен в PDF.")
+            return
+        if data == 'generate_pdf':
             return await self.generate_pdf_callback(update, context)
-        elif data == 'sync_cloud':
-            return await self.sync_cloud_callback(update, context)
-        elif data == 'view_achievements':
+        if data == 'view_achievements':
             return await self.view_achievements(update, context)
-        
-        await query.answer()
-    
+        if data == 'detailed_stats':
+            return await self.stats_command(update, context)
+        if data.startswith(('cat_', 'quiz_', 'answer_', 'next_question')):
+            await query.answer("Эта кнопка устарела. Начни заново из меню.", show_alert=True)
+            return
+        await query.answer("Эта функция пока в разработке.", show_alert=True)
+
     async def generate_pdf_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer("Генерация PDF...")
@@ -607,37 +598,18 @@ class StudyBoostBot:
         username = query.from_user.first_name
         notes = self.db.get_user_notes(user_id)
         
-        pdf_path = self.pdf_gen.create_notes_pdf(user_id, notes, username=username)
-        
-        await query.message.reply_document(
-            document=open(pdf_path, 'rb'),
-            caption="📄 Твой конспект готов!\n\n"
-                   "Можешь сохранить его или распечатать 📚"
-        )
-    
-    async def sync_cloud_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        user_id = query.from_user.id
-        
-        if not self.cloud.is_connected(user_id):
-            await query.answer("Сначала подключи облако в настройках!", show_alert=True)
+        try:
+            pdf_path = self.pdf_gen.create_notes_pdf(user_id, notes, username=username)
+        except RuntimeError:
+            await query.message.reply_text("Для PDF нужен шрифт с кириллицей. Попроси владельца установить DejaVu Sans или задать STUDYBOOST_FONT.")
             return
         
-        await query.answer("Синхронизация...")
-        
-        notes = self.db.get_user_notes(user_id)
-        notes_data = {
-            'user_id': user_id,
-            'timestamp': datetime.now().isoformat(),
-            'notes': notes
-        }
-        
-        success = self.cloud.sync_notes(user_id, notes_data)
-        
-        if success:
-            await query.message.reply_text("✅ Заметки синхронизированы с облаком!")
-        else:
-            await query.message.reply_text("❌ Ошибка синхронизации. Попробуй позже.")
+        try:
+            with open(pdf_path, 'rb') as document:
+                await query.message.reply_document(
+                    document=document, caption="📄 Твой конспект готов!")
+        finally:
+            Path(pdf_path).unlink(missing_ok=True)
     
     async def view_achievements(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -658,8 +630,54 @@ class StudyBoostBot:
         
         await query.edit_message_text(text, parse_mode='Markdown')
     
-    def run(self):
-        application = Application.builder().token(self.token).build()
+    async def add_goal_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        title = ' '.join(context.args).strip()
+        if not title or len(title) > 200:
+            await update.effective_message.reply_text("Отправь /goal и название цели длиной до 200 символов.")
+            return
+        self.db.add_goal(update.effective_user.id, title)
+        await update.effective_message.reply_text("Цель добавлена. Посмотреть цели: /goals")
+
+    async def privacy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.effective_message.reply_text(
+            "Бот хранит Telegram ID, имя, username, заметки, ссылки на вложения, цели и статистику "
+            "в SQLite на сервере владельца. Данные не зашифрованы на уровне приложения; "
+            "владелец сервера имеет к ним доступ. Не отправляй пароли и другие секреты. "
+            "Облачной синхронизации нет. Удалить записи из базы: /delete_me. "
+            "Удаление не затрагивает переписку в Telegram и резервные копии владельца.")
+
+    async def delete_me_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        nonce = secrets.token_hex(8)
+        context.user_data['delete_nonce'] = nonce
+        await update.effective_message.reply_text(
+            "Удалить все твои заметки, цели, баллы и профиль из базы бота? Это действие нельзя отменить. "
+            "Переписка в Telegram и резервные копии не удаляются.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                "Удалить мои данные", callback_data=f"delete_confirm_{nonce}")]]))
+
+    async def guard_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # A study notebook is private: never display notes in group chats.
+        if not update.effective_chat or update.effective_chat.type != 'private' or not update.effective_user:
+            raise ApplicationHandlerStop
+        user = update.effective_user
+        if not self.db.user_exists(user.id):
+            self.db.create_user(user.id, user.first_name, user.username)
+            context.user_data['new_registration'] = True
+            self.gamification.add_points(user.id, 10, "Регистрация")
+
+    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data.clear()
+        await update.effective_message.reply_text(
+            "Действие отменено.", reply_markup=self.get_main_menu_keyboard())
+        return ConversationHandler.END
+
+    async def on_error(self, update, context):
+        logger.error("Update failed (%s)", type(context.error).__name__)
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text("Не удалось выполнить действие. Попробуй /cancel и начни заново.")
+
+    def build_application(self):
+        application = Application.builder().token(self.token).concurrent_updates(False).build()
         
         note_handler = ConversationHandler(
             entry_points=[MessageHandler(filters.Regex('^📝 Добавить заметку$'), 
@@ -672,52 +690,52 @@ class StudyBoostBot:
                     MessageHandler(filters.VOICE, self.save_note)
                 ]
             },
-            fallbacks=[CommandHandler('cancel', self.start)]
+            fallbacks=[
+                CommandHandler('cancel', self.cancel),
+                CallbackQueryHandler(self.callback_handler, pattern='^delete_confirm_')
+            ],
+            allow_reentry=True
         )
         
         quiz_handler = ConversationHandler(
             entry_points=[CallbackQueryHandler(self.start_quiz, pattern='^quiz_')],
             states={
                 QUIZ_ANSWER: [
-                    CallbackQueryHandler(self.handle_quiz_answer, pattern='^answer_'),
-                    CallbackQueryHandler(self.next_question, pattern='^next_question$')
+                    CallbackQueryHandler(self.handle_quiz_answer, pattern=r'^answer_[0-9a-f]{8}_\d+_\d+$'),
+                    CallbackQueryHandler(self.next_question, pattern=r'^next_question_[0-9a-f]{8}_\d+$')
                 ]
             },
-            fallbacks=[CommandHandler('cancel', self.start)]
+            fallbacks=[
+                CommandHandler('cancel', self.cancel),
+                CallbackQueryHandler(self.callback_handler, pattern='^delete_confirm_')
+            ],
+            allow_reentry=True
         )
         
+        application.add_handler(TypeHandler(Update, self.guard_update), group=-1)
+        application.add_error_handler(self.on_error)
         application.add_handler(CommandHandler("start", self.start))
+        application.add_handler(CommandHandler("goals", self.show_goals))
+        application.add_handler(CommandHandler("goal", self.add_goal_command))
+        application.add_handler(CommandHandler("privacy", self.privacy_command))
+        application.add_handler(CommandHandler("delete_me", self.delete_me_command))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("stats", self.stats_command))
         application.add_handler(note_handler)
         application.add_handler(quiz_handler)
+        application.add_handler(CommandHandler('cancel', self.cancel))
         application.add_handler(CallbackQueryHandler(self.callback_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, 
                                               self.button_handler))
         
+        return application
+
+    def run(self):
+        application = self.build_application()
         logger.info("StudyBoost запущен!")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-    import os
-    
-    TOKEN = os.getenv('BOT_TOKEN')
-    
-    if not TOKEN:
-        try:
-            with open('config.json', 'r') as f:
-                import json
-                config = json.load(f)
-                TOKEN = config.get('bot_token', 'YOUR_BOT_TOKEN_HERE')
-        except:
-            TOKEN = "YOUR_BOT_TOKEN_HERE"
-    
-    if TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("❌ Ошибка: Токен бота не найден!")
-        print("📝 Установите переменную окружения BOT_TOKEN")
-        print("   или укажите токен в config.json")
-        exit(1)
-    
-    bot = StudyBoostBot(TOKEN)
-    bot.run()
+    from run import main
+    raise SystemExit(main())
