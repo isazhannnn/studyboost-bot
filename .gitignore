@@ -1,0 +1,36 @@
+# Credentials and local settings
+.env
+.env.*
+!.env.example
+config.json
+cloud_config.json
+*credentials*.json
+*service-account*.json
+*.pem
+*.key
+
+# Personal notes, exports and local backups
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+pdf_exports/
+temp_sync_*.json
+user_*_export_*.json
+backups/
+*.log
+
+# Python and editors
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+dist/
+build/
+*.egg-info/
+DejaVuSans.ttf

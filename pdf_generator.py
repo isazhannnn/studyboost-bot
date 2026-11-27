@@ -12,6 +12,9 @@ from reportlab.pdfbase.ttfonts import TTFont
 from datetime import datetime
 from typing import List, Dict
 import os
+from pathlib import Path
+from uuid import uuid4
+from xml.sax.saxutils import escape
 
 
 class PDFGenerator:
@@ -20,16 +23,23 @@ class PDFGenerator:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
         
-        # Попытка загрузить русский шрифт
-        try:
-            # Для русского текста нужен шрифт с поддержкой кириллицы
-            # В продакшене используйте DejaVuSans или другой Unicode-шрифт
-            pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
-            self.russian_font = 'DejaVuSans'
-        except:
-            # Fallback на стандартный шрифт
-            self.russian_font = 'Helvetica'
-    
+        self.russian_font = None
+        candidates = [
+            os.getenv('STUDYBOOST_FONT', ''),
+            'DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            str(Path(os.getenv('WINDIR', 'C:/Windows')) / 'Fonts' / 'arial.ttf'),
+            '/System/Library/Fonts/Supplemental/Arial.ttf',
+        ]
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                try:
+                    pdfmetrics.registerFont(TTFont('StudyBoostUnicode', candidate))
+                    self.russian_font = 'StudyBoostUnicode'
+                    break
+                except Exception:
+                    continue
+
     def create_notes_pdf(self, user_id: int, notes: List[Dict], 
                         category: str = None, username: str = 'Студент') -> str:
         """
@@ -44,13 +54,15 @@ class PDFGenerator:
         Returns:
             Путь к созданному PDF файлу
         """
+        if not self.russian_font:
+            raise RuntimeError('Install a Cyrillic font or set STUDYBOOST_FONT')
         # Фильтрация по категории если указана
         if category:
             notes = [n for n in notes if n.get('category') == category]
-            filename = f"{self.output_dir}/conspect_{user_id}_{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            filename = f"{self.output_dir}/conspect_{user_id}_{uuid4().hex}.pdf"
             title = f"Конспект по предмету: {category}"
         else:
-            filename = f"{self.output_dir}/conspect_{user_id}_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            filename = f"{self.output_dir}/conspect_{user_id}_{uuid4().hex}.pdf"
             title = "Общий конспект"
         
         # Создание документа
@@ -109,8 +121,8 @@ class PDFGenerator:
         content = []
         
         # Заголовок
-        content.append(Paragraph(title, title_style))
-        content.append(Paragraph(f"Автор: {username}", meta_style))
+        content.append(Paragraph(escape(title), title_style))
+        content.append(Paragraph(f"Автор: {escape(username)}", meta_style))
         content.append(Paragraph(
             f"Создано: {datetime.now().strftime('%d.%m.%Y %H:%M')}", 
             meta_style
@@ -133,7 +145,7 @@ class PDFGenerator:
         for cat_name, cat_notes in sorted(categories.items()):
             # Заголовок категории
             content.append(PageBreak())
-            content.append(Paragraph(f"📚 {cat_name}", heading_style))
+            content.append(Paragraph(f"📚 {escape(cat_name)}", heading_style))
             content.append(Paragraph(
                 f"Заметок в разделе: {len(cat_notes)}", 
                 meta_style
@@ -152,7 +164,7 @@ class PDFGenerator:
                 
                 # Метаинформация
                 content.append(Paragraph(
-                    f"<b>Заметка #{i}</b> | {date_str} | {tags_str}", 
+                    f"<b>Заметка #{i}</b> | {date_str} | {escape(tags_str)}",
                     meta_style
                 ))
                 
@@ -220,7 +232,7 @@ class PDFGenerator:
             ('BACKGROUND', (0, 0), (-1, 0), HexColor('#3498DB')),
             ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#FFFFFF')),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), self.russian_font),
+            ('FONTNAME', (0, 0), (-1, -1), self.russian_font),
             ('FONTSIZE', (0, 0), (-1, 0), 12),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
             ('BACKGROUND', (0, 1), (-1, -1), HexColor('#ECF0F1')),
@@ -281,7 +293,7 @@ class PDFGenerator:
         
         # Заголовок
         content.append(Paragraph("📅 Расписание занятий", title_style))
-        content.append(Paragraph(f"Студент: {username}", styles['Normal']))
+        content.append(Paragraph(f"Студент: {escape(username)}", styles['Normal']))
         content.append(Spacer(1, 1*cm))
         
         # Дни недели

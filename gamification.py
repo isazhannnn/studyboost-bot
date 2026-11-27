@@ -8,7 +8,8 @@ import sqlite3
 
 
 class GamificationSystem:
-    def __init__(self):
+    def __init__(self, db_name='studyboost.db'):
+        self.db_name = db_name
         # Таблица уровней и требований
         self.level_requirements = {
             1: 0,      # Новичок
@@ -161,7 +162,7 @@ class GamificationSystem:
     
     def get_connection(self):
         """Получение подключения к БД"""
-        conn = sqlite3.connect('studyboost.db')
+        conn = sqlite3.connect(self.db_name)
         conn.row_factory = sqlite3.Row
         return conn
     
@@ -315,16 +316,25 @@ class GamificationSystem:
             ''', (user_id, achievement_key, achievement['description']))
             
             # Начисляем баллы
-            self.add_points(user_id, achievement['points'], 
-                          f"Достижение: {achievement['name']}")
+            cursor.execute(
+                'UPDATE users SET total_points = total_points + ? WHERE user_id = ?',
+                (achievement['points'], user_id))
+            cursor.execute(
+                "INSERT INTO activity_log (user_id, activity_type, points_earned, description) VALUES (?, 'points_earned', ?, ?)",
+                (user_id, achievement['points'], f"Достижение: {achievement['name']}"))
             
             achievement_texts.append(
                 f"{achievement['emoji']} {achievement['name']} (+{achievement['points']} баллов)"
             )
         
+        cursor.execute('SELECT total_points FROM users WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        if row:
+            cursor.execute('UPDATE users SET current_level = ? WHERE user_id = ?',
+                           (self.calculate_level(row['total_points']), user_id))
         conn.commit()
         conn.close()
-        
+
         return achievement_texts
     
     def get_user_achievements(self, user_id: int) -> List[Dict]:
